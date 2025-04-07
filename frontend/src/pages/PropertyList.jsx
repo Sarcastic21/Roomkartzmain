@@ -224,7 +224,7 @@ const PropertyList = () => {
                     (property.images && property.images[0]) ||
                     "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?ixlib=rb-1.2.1&auto=format&fit=crop&w=500&q=80"
                   }
-                  alt={property.address}
+                  alt={property.near}
                   className="w-full h-full object-cover"
                 />
                 <span
@@ -241,7 +241,7 @@ const PropertyList = () => {
               <div className="flex-1 p-6 space-y-4">
   <h3 className="text-2xl font-semibold flex items-center">
     <FiMapPin className="mr-1.5 h-5 w-5 text-gray-400" />
-    {property.address}
+    {property.near}
   </h3>
   <div className="flex flex-col sm:flex-row justify-between text-gray-600">
     <p className="flex items-center mb-2 sm:mb-0">

@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import User from "../models/UserModel.js";
 import verifyToken  from "../middleware/auth.js"; // Ensure the correct file extension
+import twilio from 'twilio';
 
 const saltRounds = 10;
 const router = express.Router();
@@ -19,50 +20,97 @@ const generateOtp = () => {
   return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
 };
 
-// Send OTP
+const accountSid = process.env.TWILIO_ACCOUNT_SID;
+const authToken = process.env.TWILIO_AUTH_TOKEN;
+const twilioPhone = process.env.TWILIO_PHONE_NUMBER;
+const client = twilio(accountSid, authToken);
+// In-memory OTP store (replace with Redis in production)
+
+
+
+// Send OTP via SMS
 router.post('/send-otp2', async (req, res) => {
-  const { email } = req.body;
+  const { mobile } = req.body;
+  
+  // Validate mobile number
+  if (!mobile || !/^\d{10}$/.test(mobile)) {
+    return res.status(400).json({ message: 'Please provide a valid 10-digit mobile number' });
+  }
+
+  const formattedMobile = `+91${mobile}`; // Add Indian country code
   const otp = generateOtp();
 
-  // Set OTP expiry time (5 minutes)
-  otpStore[email] = { otp, expires: Date.now() + 300000 };
-
-  // Create a transporter using your email service
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: EMAIL_USER,
-      pass: EMAIL_PASS,
-    },
-  });
-
-  // Mail options
-  const mailOptions = {
-    from: EMAIL_USER, // you can also hardcode your email here if it's always the same
-    to: email,
-    subject: 'Your OTP Code',
-    text: `Your OTP code is: ${otp}`,
+  // Set OTP expiry (5 minutes)
+  otpStore[formattedMobile] = { 
+    otp, 
+    expires: Date.now() + 300000,
+    attempts: 0 
   };
 
   try {
-    await transporter.sendMail(mailOptions);
-    res.status(200).json({ message: 'OTP sent to your email' });
+    await client.messages.create({
+      body: `Your OTP code is: ${otp}. Valid for 5 minutes.`,
+      from: twilioPhone,
+      to: formattedMobile
+    });
+    
+    res.status(200).json({ message: 'OTP sent to your mobile' });
   } catch (error) {
-    console.error('Error sending OTP:', error);  // Improved error logging
-    res.status(500).json({ message: 'Error sending OTP' });
+    console.error('Twilio error:', error);
+    
+    // Handle specific Twilio errors
+    if (error.code === 21211) {
+      return res.status(400).json({ message: 'Invalid mobile number' });
+    }
+    if (error.code === 21614) {
+      return res.status(400).json({ message: 'This number is not mobile-capable' });
+    }
+    
+    res.status(500).json({ 
+      message: 'Failed to send OTP', 
+      error: error.message 
+    });
   }
 });
 
 // Verify OTP
 router.post('/verify-otp', async (req, res) => {
-  const { email, otp } = req.body;
-
-  if (otpStore[email] && otpStore[email].otp === otp && Date.now() < otpStore[email].expires) {
-    delete otpStore[email]; // Remove OTP after successful verification
-    res.status(200).json({ message: 'OTP verified' });
-  } else {
-    res.status(400).json({ message: 'Invalid or expired OTP' });
+  const { mobile, otp } = req.body;
+  
+  if (!mobile || !/^\d{10}$/.test(mobile)) {
+    return res.status(400).json({ message: 'Invalid mobile number' });
   }
+  if (!otp || !/^\d{6}$/.test(otp)) {
+    return res.status(400).json({ message: 'Invalid OTP format' });
+  }
+
+  const formattedMobile = `+91${mobile}`;
+  const storedOtp = otpStore[formattedMobile];
+
+  if (!storedOtp) {
+    return res.status(400).json({ message: 'OTP expired or not requested' });
+  }
+
+  // Increment attempt counter
+  storedOtp.attempts += 1;
+
+  if (storedOtp.attempts > 5) {
+    delete otpStore[formattedMobile];
+    return res.status(400).json({ message: 'Too many attempts. Please request a new OTP' });
+  }
+
+  if (Date.now() > storedOtp.expires) {
+    delete otpStore[formattedMobile];
+    return res.status(400).json({ message: 'OTP expired' });
+  }
+
+  if (storedOtp.otp !== otp) {
+    return res.status(400).json({ message: 'Invalid OTP' });
+  }
+
+  // OTP verified successfully
+  delete otpStore[formattedMobile];
+  res.status(200).json({ message: 'OTP verified successfully' });
 });
 
 // Register User
@@ -106,21 +154,26 @@ router.post('/login', async (req, res) => {
     res.status(500).json({ error: 'Failed to login' });
   }
 });
+
 router.post('/logout', async (req, res) => {
-  const { mobile } = req.body;
-
   try {
-    const user = await User.findOne({ mobile });
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ message: "Unauthorized" });
 
-    user.isActive = false;
-    await user.save();
+    const token = authHeader.split(" ")[1];
+    const decoded = jwt.verify(token, SECRET_KEY);
+    const userId = decoded.userId;
 
-    res.json({ message: 'Logout successful' });
-  } catch (error) {
-    res.status(500).json({ error: 'Logout failed' });
+    // Set user as inactive
+    await User.findByIdAndUpdate(userId, { isActive: false });
+
+    res.json({ message: "Logout successful" });
+  } catch (err) {
+    console.error("Logout error:", err);
+    res.status(500).json({ message: "Logout failed" });
   }
 });
+
 
 router.get('/all-users', async (req, res) => {
   try {
@@ -132,83 +185,95 @@ router.get('/all-users', async (req, res) => {
 });
 
 
-// Send OTP for password reset (same as before)
-router.post('/send-otp', async (req, res) => {
-  const { email } = req.body;
+
+router.post("/send-otp", async (req, res) => {
+  const { mobile } = req.body;
+
+  if (!mobile || !/^\d{10}$/.test(mobile)) {
+    return res.status(400).json({
+      success: false,
+      message: "Please provide a valid 10-digit mobile number",
+    });
+  }
+
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const hashedOtp = await bcrypt.hash(otp, 10);
+
   try {
-    // Check if the user exists in the database
-    let user = await User.findOne({ email });
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const hashedOtp = await bcrypt.hash(otp, 10);
-
-    if (user) {
-      // If user exists, it's for password reset
-      user.otp = hashedOtp;
-      user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
-      await user.save();
-
-      // Send OTP for password reset
-      const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: { user: EMAIL_USER, pass: EMAIL_PASS },
+    // Match number without +91 in DB
+    const user = await User.findOne({ mobile });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "No account found with this mobile number",
       });
-
-      const mailOptions = {
-        from: EMAIL_USER,
-        to: email,
-        subject: 'Password Reset OTP',
-        text: `Your OTP for password reset is: ${otp}`,
-      };
-
-      await transporter.sendMail(mailOptions);
-      return res.json({ success: true, message: 'OTP sent to your email for password reset.' });
-    } else {
-      // If the user doesn't exist, it's for registration
-      user = new User({ email, otp: hashedOtp, otpExpires: Date.now() + 10 * 60 * 1000 });
-      await user.save();
-
-      // Send OTP for registration
-      const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: { user: EMAIL_USER, pass: EMAIL_PASS },
-      });
-
-      const mailOptions = {
-        from: EMAIL_USER,
-        to: email,
-        subject: 'Registration OTP',
-        text: `Your OTP for registration is: ${otp}`,
-      };
-
-      await transporter.sendMail(mailOptions);
-      return res.json({ success: true, message: 'OTP sent to your email for registration.' });
     }
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to send OTP.', error: err.message });
+
+    user.otp = hashedOtp;
+    user.otpExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+    await user.save();
+
+    // Send OTP with +91 prefix
+    await client.messages.create({
+      body: `Your password reset OTP is: ${otp}. Valid for 10 minutes.`,
+      from: twilioPhone,
+      to: `+91${mobile}`,
+    });
+
+    res.json({
+      success: true,
+      message: "OTP sent to your mobile number",
+    });
+  } catch (error) {
+    console.error("Twilio error:", error);
+
+    let errorMessage = "Failed to send OTP";
+    if (error.code === 21211) errorMessage = "Invalid mobile number";
+    if (error.code === 21614) errorMessage = "This number cannot receive SMS";
+
+    res.status(500).json({
+      success: false,
+      message: errorMessage,
+      error: error.message,
+    });
   }
 });
 
-// Reset Password
-router.post('/forgot-password', async (req, res) => {
-  const { email, otp, newPassword } = req.body;
+// ✅ Reset Password
+router.post("/forgot-password", async (req, res) => {
+  const { mobile, otp, newPassword } = req.body;
+
+  if (!mobile || !/^\d{10}$/.test(mobile)) {
+    return res.status(400).json({ message: "Invalid mobile number" });
+  }
+  if (!otp || !/^\d{6}$/.test(otp)) {
+    return res.status(400).json({ message: "Invalid OTP format" });
+  }
+  if (!newPassword || newPassword.length < 6) {
+    return res
+      .status(400)
+      .json({ message: "Password must be at least 6 characters" });
+  }
+
   try {
-    const user = await User.findOne({ email });
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    const user = await User.findOne({ mobile });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     const isOtpValid = await bcrypt.compare(otp, user.otp);
-    if (!isOtpValid || Date.now() > user.otpExpires)
-      return res.status(400).json({ message: 'Invalid or expired OTP.' });
+    if (!isOtpValid || Date.now() > user.otpExpires) {
+      return res.status(400).json({ message: "Invalid or expired OTP" });
+    }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
-    user.otp = null;
-    user.otpExpires = null;
+    user.otp = undefined;
+    user.otpExpires = undefined;
     await user.save();
 
-    res.json({ success: true, message: 'Password updated successfully.' });
+    res.json({ success: true, message: "Password updated successfully" });
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to reset password.' });
+    console.error("Password reset error:", err);
+    res.status(500).json({ success: false, message: "Failed to reset password" });
   }
 });
 
@@ -234,7 +299,13 @@ router.get("/my-properties", verifyToken, async (req, res) => {
     res.status(500).json({ error: "Failed to fetch properties" });
   }
 });
-// routes/userRoutes.js or wherever you define the route
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: EMAIL_USER,
+    pass: EMAIL_PASS, // your app password
+  },
+});
 router.post("/add-property", verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId);
@@ -242,12 +313,13 @@ router.post("/add-property", verifyToken, async (req, res) => {
 
     const {
       address,
+      near,
       description,
       rent,
       gender,
       furnishing,
       restriction,
-      images, // Get multiple base64 image strings
+      images,
       status,
       wifi,
       ac,
@@ -258,6 +330,7 @@ router.post("/add-property", verifyToken, async (req, res) => {
 
     const newProperty = {
       address,
+      near,
       description,
       rent,
       gender,
@@ -265,7 +338,7 @@ router.post("/add-property", verifyToken, async (req, res) => {
       restriction,
       images,
       status: status || "Open",
-      wifi,          // Store checkbox values
+      wifi,
       ac,
       waterSupply,
       powerBackup,
@@ -274,6 +347,41 @@ router.post("/add-property", verifyToken, async (req, res) => {
 
     user.properties.push(newProperty);
     await user.save();
+
+    // Send email to notify about the new property
+    const mailOptions = {
+      from: '"Property Notifier" <itsayushmaurya991@gmail.com>',
+      to: "ayushmaurya3596@gmail.com",
+      subject: "New Property Registered",
+      html: `
+        <h2>New Property Details</h2>
+        <p><strong>Address:</strong> ${address}</p>
+        <p><strong>Description:</strong> ${description}</p>
+        <p><strong>Rent:</strong> ₹${rent}</p>
+        <p><strong>Rent:</strong> ₹${near}</p>
+
+        <p><strong>Gender:</strong> ${gender}</p>
+        <p><strong>Furnishing:</strong> ${furnishing}</p>
+        <p><strong>Restriction:</strong> ${restriction}</p>
+        <p><strong>Status:</strong> ${status}</p>
+        <p><strong>Amenities:</strong> 
+          ${wifi ? "WiFi, " : ""} 
+          ${ac ? "AC, " : ""} 
+          ${waterSupply ? "Water Supply, " : ""} 
+          ${powerBackup ? "Power Backup, " : ""} 
+          ${security ? "Security" : ""}
+        </p>
+        <p><strong>Submitted By:</strong> ${user.name} (${user.email})</p>
+      `,
+    };
+
+    transporter.sendMail(mailOptions, (error, info) => {
+      if (error) {
+        console.error("Error sending email:", error);
+      } else {
+        console.log("Email sent: " + info.response);
+      }
+    });
 
     res.status(200).json({ status: "success", property: newProperty });
   } catch (err) {

@@ -17,11 +17,33 @@ const Navbar = () => {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  const handleLogout = () => {
-    localStorage.clear();
-    navigate("/login");
-    setIsMenuOpen(false);
+  const handleLogout = async () => {
+    const token = localStorage.getItem("token");
+  
+    if (!token) return;
+  
+    try {
+      const response = await fetch("http://localhost:5000/api/users/logout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+  
+      if (response.ok) {
+        localStorage.clear();
+        navigate("/login");
+        setIsMenuOpen(false);
+      } else {
+        const error = await response.json();
+        console.error("Logout failed:", error.message);
+      }
+    } catch (err) {
+      console.error("Error during logout:", err);
+    }
   };
+  
 
   const navLinks = [
     ...(isLoggedIn && role !== "User"

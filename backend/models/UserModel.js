@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 // models/Property.js or inside userSchema properties field
 const propertySchema = new mongoose.Schema({
   address: { type: String, required: true },
+  near: { type: String, required: true },
+
   description: { type: String, required: true },
   rent: { type: Number, required: true },
   gender: { type: String, required: true },

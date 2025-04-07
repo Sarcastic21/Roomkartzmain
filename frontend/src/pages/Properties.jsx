@@ -2,20 +2,7 @@ import React from "react";
 import Navbar from "../components/Navbar";
 
 // Dummy data — replace with actual API data
-const propertyList = [
-  {
-    id: 1,
-    address: "Satellite, Ahmedabad",
-    rent: "₹8000",
-    status: "Booked",
-  },
-  {
-    id: 2,
-    address: "Bopal, Ahmedabad",
-    rent: "₹7500",
-    status: "Available",
-  },
-];
+
 
 const Properties = () => {
   return (
