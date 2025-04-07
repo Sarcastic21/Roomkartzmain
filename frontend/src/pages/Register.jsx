@@ -106,7 +106,7 @@ const Register = () => {
       toast.warning("Please verify the OTP first.");
       return;
     }
-
+  
     setLoadingRegister(true);
     try {
       const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
@@ -115,14 +115,15 @@ const Register = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
       });
-
+  
       const data = await response.json();
-
+  
       if (response.ok) {
         localStorage.setItem("token", data.token);
         toast.success(`Registration successful! Welcome ${formData.name}`);
-        const redirectTo = data.user.role === "User" ? "/user-dashboard" : "/broker-dashboard";
-        setTimeout(() => navigate(redirectTo), 1500);
+  
+        // ✅ Navigate to /login for all users
+        setTimeout(() => navigate("/login"), 1500);
       } else {
         toast.error(data.message || "Registration failed. Please try again.");
       }
@@ -133,7 +134,7 @@ const Register = () => {
       setLoadingRegister(false);
     }
   };
-
+  
   const handleMobileChange = (e) => {
     const value = e.target.value.replace(/\D/g, '').slice(0, 10);
     setFormData({ ...formData, mobile: value });
