@@ -133,6 +133,7 @@ router.post('/register', async (req, res) => {
 
 
 // Login user
+
 router.post('/login', async (req, res) => {
   const { mobile, password } = req.body;
 
@@ -147,10 +148,24 @@ router.post('/login', async (req, res) => {
     user.isActive = true;
     await user.save();
 
-    const token = jwt.sign({ userId: user._id, role: user.role }, SECRET_KEY, { expiresIn: '48h' });
+    // ✅ Create JWT with 48h expiration
+    const token = jwt.sign(
+      { userId: user._id, role: user.role },
+      SECRET_KEY,
+      { expiresIn: '24h' } // Token valid for 48 hours
+    );
 
-    res.json({ message: 'Login successful', token, user });
+    // ✅ Decode the token to get expiry time
+    const decoded = jwt.decode(token); // Only decodes the payload (doesn't verify)
+
+    res.json({
+      message: 'Login successful',
+      token,
+      user,
+      expiresAt: decoded.exp * 1000 // Convert to milliseconds for frontend use
+    });
   } catch (err) {
+    console.error("Login error:", err);
     res.status(500).json({ error: 'Failed to login' });
   }
 });
